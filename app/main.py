@@ -2,10 +2,11 @@ import os
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from typing import Any, Dict, List, Union, Optional
 from fastapi.params import Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse,JSONResponse
 import httpx
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from pypdf import PdfReader
 
 # Load environment variables from .env file
 load_dotenv()
@@ -13,6 +14,7 @@ load_dotenv()
 app = FastAPI(title="EU Farmbook Translation Service",
               description="Standalone FastAPI microservice for the translation of documents and JSON files using DeepL API.")
 
+file_type = ['.ppt','.pptx','.doc','.docx','.pdf']
 
 class DocumentMetadata(BaseModel):
     id: str = Field(..., alias="@id")
@@ -44,7 +46,7 @@ async def translate_document(request: TranslateDocumentRequest):
 
         file_name = request.object_metadata.object_name
         file_ext = request.object_metadata.object_extension
-
+        file_size = request.object_metadata.object_size
         async with httpx.AsyncClient() as client:
             response = await client.get(file_url)
             if response.status_code != 200:
@@ -61,16 +63,28 @@ async def translate_document(request: TranslateDocumentRequest):
         with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as temp_input:
             temp_input.write(contents)
             input_path = temp_input.name
+            pdf = PdfReader(input_path)
+            number_of_pages = len(pdf.pages)
 
         output_path = tempfile.NamedTemporaryFile(suffix=file_ext, delete=False).name
 
+        if file_ext not in file_type:
+            return JSONResponse(content = {"message":f"The translation service does not support {file_ext} files"},status_code=400)
+
+        if file_size > int(2E+8):
+            return JSONResponse(content={"message":"File size over 25 MB"},status_code=400)
+
+        if number_of_pages > 25:
+            return JSONResponse(content={f"message":f"Translation service for files with {number_of_pages} pages is not supported"},status_code=400)
 
         deepl_client.translate_document_from_filepath(
-            input_path,
-            output_path,
-            target_lang=request.target_lang,
-            source_lang=request.source_lang
-        )
+                input_path,
+                output_path,
+                target_lang=request.target_lang,
+                source_lang=request.source_lang
+            )
+
+
 
         with open(output_path, "rb") as output_file:
             translated_content = output_file.read()
@@ -126,7 +140,6 @@ async def translate_json(
             raise HTTPException(status_code=500, detail="DeepL API key not configured")
 
         deepl_client = deepl.Translator(api_key)
-
         translated_data = await translate_json_values(
             data,
             deepl_client,
