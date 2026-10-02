@@ -74,9 +74,21 @@ attachment; filename*=UTF-8''translated_%CE%9F%CE%B4%CE%B7%CE%B3%CF%8C%CF%82.pdf
   `filename=` and saves the translated file under it, so keep this order.
 
 The call is **synchronous**: the request stays open until DeepL has finished. A few-MB PDF
-typically takes 20–30 seconds. Translations run in a thread pool, so several can be in progress
-at once. File types and size limits are DeepL's; see
+typically takes 20–30 seconds. File types and size limits are DeepL's; see
 [DeepL's document translation docs](https://developers.deepl.com/docs/api-reference/document).
+
+How a request is processed:
+
+1. **Download.** The file is streamed from `@id` to a temporary directory.
+2. **Upload.** The file is sent to DeepL. This is the only step that holds the document in memory
+   (about twice its size), so at most `MAX_CONCURRENT_UPLOADS` uploads run at once and the rest
+   wait their turn.
+3. **Wait.** DeepL is asked every second whether the document is done.
+4. **Fetch.** The translated file is streamed from DeepL to disk, then from disk to the caller.
+
+Requests run in a thread pool, so several documents can be translated at once. The whole request
+is limited to `DOCUMENT_TIMEOUT_S`; past that it ends with `504`, because the frontend has stopped
+waiting by then. The temporary directory is always removed.
 
 ### `POST /translate-json?target_lang=DE&source_lang=EN`
 
@@ -116,9 +128,16 @@ own, so DeepL's rules apply:
 | Variable | Required | Description |
 |---|---|---|
 | `DEEPL_API_KEY` | yes | DeepL API key. Keys ending in `:fx` (free plan) are routed to DeepL's free endpoint automatically. |
+| `DOCUMENT_TIMEOUT_S` | no | Time limit for a whole document translation, in seconds. Default `280`, just under the frontend's 300 s. |
+| `MAX_CONCURRENT_UPLOADS` | no | How many documents may be uploading to DeepL at the same time. Default `3`. Each upload holds about twice the file's size in memory. |
 
-The key is read from the environment, or from a `.env` file in the working directory
+Variables are read from the environment, or from a `.env` file in the working directory
 (`.env` is git-ignored).
+
+The `Dockerfile` also sets `MALLOC_MMAP_THRESHOLD_=1048576`. Without it, glibc kept the memory of
+finished uploads in per-thread pools instead of returning it: eight simultaneous 30 MB documents
+peaked at ~510 MB instead of ~200 MB, against the 512 MB container limit. Keep it if you change
+the base image.
 
 > **Careful:** every call (including local testing) uses real DeepL characters from whichever
 > key you configure. The dev and prd deployments share one DeepL account.
@@ -162,11 +181,25 @@ Errors are JSON: `{"detail": "<message>"}`. DeepL's own message is kept, prefixe
 | `429` | DeepL is rate-limiting us, even after the client library's own retries. Retry later. |
 | `502` | The file couldn't be downloaded (connection error or a non-200 answer from storage), the DeepL key was refused, DeepL couldn't be reached, or DeepL had a server error. |
 | `503` | The DeepL account's character quota for this billing period is used up. |
-| `504` | Downloading the file from storage timed out. |
+| `504` | Downloading the file from storage timed out, or the document wasn't translated within `DOCUMENT_TIMEOUT_S` (including time spent waiting for an upload slot). |
 | `500` | Anything unexpected, i.e. a bug in this service; also when `DEEPL_API_KEY` isn't set. |
 
 api-core passes `4xx` responses through to its caller unchanged and turns `5xx` responses into its
 own `502`, with this service's status and body under `detail.upstream_status` / `upstream_body`.
+
+## Logs
+
+Each request writes one line, to standard error:
+
+```
+INFO deepl_translation_service: document translated: file='factsheet.pdf' hash=5d41… target=de source=auto in_bytes=3612345 out_bytes=3650112 billed_characters=48213 download=0.3s queued=0.0s upload=1.1s deepl=19.0s fetch=0.2s total=20.6s
+WARNING deepl_translation_service: document translation failed: file='scan.pdf' … status=422 download=0.2s queued=0.0s upload=0.9s deepl=4.0s total=5.1s detail=DeepL API error: …
+INFO deepl_translation_service: json translated: target=DE source=auto strings=22 unique=18 characters=1310 deepl_requests=1 total=0.7s
+```
+
+The stage timings show where the time went. `queued` is time spent waiting for an upload slot.
+Unexpected errors are also logged with a full traceback. Download URLs are never logged, since they
+may be pre-signed.
 
 ## Deployment
 
@@ -183,7 +216,8 @@ own `502`, with this service's status and body under `detail.upstream_status` / 
 
 - **Synchronous document translation.** The caller's request stays open for the whole DeepL run,
   and nothing is stored here, so a request cut off by a timeout further up the chain has to be
-  repeated (and DeepL charges again).
+  repeated (and DeepL charges again). DeepL also keeps working on (and charging for) a document
+  after this service's own time limit has ended the request.
 - **Approximate names for some scripts.** Greek, Cyrillic and similar names survive only in
   `filename*`. api-core currently reads the plain `filename`, so for those files it saves a name
   made of `_` (the extension is kept).
