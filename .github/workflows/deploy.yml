@@ -1,0 +1,23 @@
+name: deploy
+
+# Builds the image and records its tag in the platform repository, which
+# deploys it to DEV; UAT and PRD take the same base and promote by merge.
+# Image: ghcr.io/eu-farmbook/deepl-translation:<short sha>, from the Dockerfile
+# at the repository root.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    # Required: the default workflow token is read-only, and a called workflow
+    # cannot be granted more than its caller holds.
+    permissions:
+      contents: read
+      packages: write
+    uses: EU-FarmBook/ci-workflows/.github/workflows/build-and-deploy.yml@v1
+    with:
+      service: deepl-translation
+    secrets:
+      PLATFORM_REPO_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}
