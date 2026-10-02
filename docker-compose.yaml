@@ -3,6 +3,8 @@ version: '3'
 services:
   api:
     build: .
+    # Local development only: the source is mounted below, so reload on code changes.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8008", "--reload"]
     container_name: fastapi-microservice
     ports:
       - "8008:8008"

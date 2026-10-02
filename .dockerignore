@@ -1,0 +1,11 @@
+# Keep secrets, VCS metadata and local tooling out of the image (the Dockerfile does `COPY . .`).
+.env
+.git
+.gitignore
+.idea/
+.venv/
+**/__pycache__/
+**/*.pyc
+docker-compose.yaml
+Dockerfile
+.dockerignore
