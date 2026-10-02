@@ -1,12 +1,13 @@
 name: deploy
 
-# Builds the image and records its tag in the platform repository, which
-# deploys it to DEV; UAT and PRD take the same base and promote by merge.
+# Builds the image and records its tag in the platform repository: a push to
+# `dev` deploys it to DEV, a push to `main` releases it to UAT and, after a
+# manual Sync, PRD (branch_model below, decided 2 Oct 2026).
 # Image: ghcr.io/eu-farmbook/deepl-translation:<short sha>, from the Dockerfile
 # at the repository root.
 on:
   push:
-    branches: [ main ]
+    branches: [ dev, main ]
   workflow_dispatch:
 
 jobs:
@@ -19,5 +20,6 @@ jobs:
     uses: EU-FarmBook/ci-workflows/.github/workflows/build-and-deploy.yml@v1
     with:
       service: deepl-translation
+      branch_model: dev-main
     secrets:
       PLATFORM_REPO_TOKEN: ${{ secrets.PLATFORM_REPO_TOKEN }}
