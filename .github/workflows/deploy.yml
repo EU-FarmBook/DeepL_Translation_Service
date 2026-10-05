@@ -1,19 +1,15 @@
 name: deploy
 
-# Builds the image and records its tag in the platform repository: a push to
-# `dev` deploys it to DEV, a push to `main` releases it to UAT and, after a
-# manual Sync, PRD (branch_model below, decided 2 Oct 2026).
-# Image: ghcr.io/eu-farmbook/deepl-translation:<short sha>, from the Dockerfile
-# at the repository root.
+# Builds ghcr.io/eu-farmbook/deepl-translation from the root Dockerfile.
 on:
   push:
+    # dev deploys to DEV; main is released to UAT and PRD.
     branches: [ dev, main ]
   workflow_dispatch:
 
 jobs:
   deploy:
-    # Required: the default workflow token is read-only, and a called workflow
-    # cannot be granted more than its caller holds.
+    # packages: write lets the reusable workflow push the image to GHCR.
     permissions:
       contents: read
       packages: write
